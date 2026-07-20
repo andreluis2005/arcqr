@@ -1,9 +1,7 @@
 export const ARC_QR_PAYMENTS_ABI = [
   {
     "anonymous": false,
-    "inputs": [
-      { "indexed": true, "internalType": "bytes32", "name": "invoiceId", "type": "bytes32" }
-    ],
+    "inputs": [{ "indexed": true, "internalType": "bytes32", "name": "invoiceId", "type": "bytes32" }],
     "name": "PaymentCancelled",
     "type": "event"
   },
@@ -32,6 +30,43 @@ export const ARC_QR_PAYMENTS_ABI = [
     "name": "PaymentRequestCreated",
     "type": "event"
   },
+  // ===== NanoPayments events =====
+  {
+    "anonymous": false,
+    "inputs": [
+      { "indexed": true, "internalType": "bytes32", "name": "channelId", "type": "bytes32" },
+      { "indexed": true, "internalType": "address", "name": "payer", "type": "address" },
+      { "indexed": true, "internalType": "address", "name": "receiver", "type": "address" },
+      { "indexed": false, "internalType": "address", "name": "token", "type": "address" },
+      { "indexed": false, "internalType": "uint256", "name": "deposit", "type": "uint256" },
+      { "indexed": false, "internalType": "uint256", "name": "ratePerTick", "type": "uint256" },
+      { "indexed": false, "internalType": "uint256", "name": "intervalSeconds", "type": "uint256" }
+    ],
+    "name": "NanoChannelOpened",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      { "indexed": true, "internalType": "bytes32", "name": "channelId", "type": "bytes32" },
+      { "indexed": true, "internalType": "address", "name": "receiver", "type": "address" },
+      { "indexed": false, "internalType": "uint256", "name": "amount", "type": "uint256" },
+      { "indexed": false, "internalType": "uint256", "name": "totalWithdrawn", "type": "uint256" }
+    ],
+    "name": "NanoTickSettled",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      { "indexed": true, "internalType": "bytes32", "name": "channelId", "type": "bytes32" },
+      { "indexed": true, "internalType": "address", "name": "payer", "type": "address" },
+      { "indexed": false, "internalType": "uint256", "name": "refunded", "type": "uint256" }
+    ],
+    "name": "NanoChannelClosed",
+    "type": "event"
+  },
+  // ===== Invoice functions =====
   {
     "inputs": [{ "internalType": "bytes32", "name": "invoiceId", "type": "bytes32" }],
     "name": "cancel",
@@ -85,6 +120,69 @@ export const ARC_QR_PAYMENTS_ABI = [
     "name": "pay",
     "outputs": [],
     "stateMutability": "payable",
+    "type": "function"
+  },
+  // ===== NanoPayments functions =====
+  {
+    "inputs": [
+      { "internalType": "address", "name": "receiver", "type": "address" },
+      { "internalType": "address", "name": "token", "type": "address" },
+      { "internalType": "uint256", "name": "ratePerTick", "type": "uint256" },
+      { "internalType": "uint256", "name": "intervalSeconds", "type": "uint256" },
+      { "internalType": "uint256", "name": "durationInSeconds", "type": "uint256" }
+    ],
+    "name": "openNanoChannel",
+    "outputs": [{ "internalType": "bytes32", "name": "", "type": "bytes32" }],
+    "stateMutability": "payable",
+    "type": "function"
+  },
+  {
+    "inputs": [{ "internalType": "bytes32", "name": "channelId", "type": "bytes32" }],
+    "name": "settleNanoChannel",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [{ "internalType": "bytes32", "name": "channelId", "type": "bytes32" }],
+    "name": "closeNanoChannel",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [{ "internalType": "bytes32", "name": "channelId", "type": "bytes32" }],
+    "name": "getNanoChannel",
+    "outputs": [
+      {
+        "components": [
+          { "internalType": "address", "name": "payer", "type": "address" },
+          { "internalType": "address", "name": "receiver", "type": "address" },
+          { "internalType": "address", "name": "token", "type": "address" },
+          { "internalType": "uint256", "name": "deposit", "type": "uint256" },
+          { "internalType": "uint256", "name": "withdrawn", "type": "uint256" },
+          { "internalType": "uint256", "name": "ratePerTick", "type": "uint256" },
+          { "internalType": "uint256", "name": "intervalSeconds", "type": "uint256" },
+          { "internalType": "uint256", "name": "lastTickAt", "type": "uint256" },
+          { "internalType": "uint256", "name": "openedAt", "type": "uint256" },
+          { "internalType": "bool", "name": "closed", "type": "bool" }
+        ],
+        "internalType": "struct ArcQRPayments.NanoChannel",
+        "name": "",
+        "type": "tuple"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [{ "internalType": "bytes32", "name": "channelId", "type": "bytes32" }],
+    "name": "estimateOwed",
+    "outputs": [
+      { "internalType": "uint256", "name": "newTicks", "type": "uint256" },
+      { "internalType": "uint256", "name": "owed", "type": "uint256" }
+    ],
+    "stateMutability": "view",
     "type": "function"
   }
 ] as const;

@@ -16,6 +16,7 @@ import {
   Share2,
 } from "lucide-react";
 import { usePaymentRequest, usePayInvoice } from "@/hooks/useArcPayments";
+import { usePaymentNotification } from "@/hooks/usePaymentNotification";
 import { ARC_TESTNET } from "@/constants/chain";
 import { ZERO_ADDRESS } from "@/constants/contracts";
 import {
@@ -35,6 +36,10 @@ export default function PayPage() {
   const { switchChain } = useSwitchChain();
   const { request, isLoading, error: readError } = usePaymentRequest(invoiceId);
   const { pay, isPending, isConfirming, isSuccess, hash } = usePayInvoice();
+  
+  // Ativa notificações de pagamento no navegador
+  usePaymentNotification(request?.paid, request?.title);
+
   const [payError, setPayError] = useState<string | null>(null);
   const [copyHashSuccess, setCopyHashSuccess] = useState(false);
 
@@ -543,6 +548,36 @@ export default function PayPage() {
                       Pay {amountFormatted} USDC
                     </>
                   )}
+                </button>
+
+                {/* Paymaster sponsored path — relayer pays gas so user doesn't need USDC for fees */}
+                <button
+                  className="btn-ghost"
+                  onClick={async () => {
+                    try {
+                      setPayError(null);
+                      const r = await fetch("/api/sponsor", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ invoiceId, payer: address }),
+                      });
+                      const j = await r.json();
+                      if (!r.ok) {
+                        setPayError(
+                          j.instructions
+                            ? `Paymaster not configured yet (${j.error}). Set PAYMASTER_RELAYER_KEY to activate.`
+                            : (j.error as string) ?? "Sponsor failed"
+                        );
+                      }
+                    } catch (e) {
+                      const msg = e instanceof Error ? e.message : "Sponsor network error";
+                      setPayError(msg);
+                    }
+                  }}
+                  style={{ width: "100%", justifyContent: "center", fontSize: "12px", marginTop: "8px" }}
+                  title="Use Circle Paymaster to sponsor my gas fees"
+                >
+                  Sponsor my gas (Paymaster)
                 </button>
               </>
             )}

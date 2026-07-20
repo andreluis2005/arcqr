@@ -1,225 +1,166 @@
-# Arc QR — Blockchain Payment Requests on Arc Network
+# Arc QR
 
-> **Create blockchain payment requests in seconds.**  
-> Built for hackathons, builders and the Arc Network ecosystem by Circle.
+> **Track**: Agentic Economy (Hackathon: Programmable Money · Encode Club + Circle · 2026)
+> **Live demo**: <TODO — cole aqui o link Vercel>
+> **Video pitch**: <TODO — link do vídeo 3min>
+> **Contract on Arc testnet**: <TODO — cole aqui o endereço público + explorer link>
 
-![Arc QR](https://img.shields.io/badge/Arc%20Network-Testnet-7c3aed?style=for-the-badge)
-![Next.js](https://img.shields.io/badge/Next.js-16-black?style=for-the-badge&logo=next.js)
-![Solidity](https://img.shields.io/badge/Solidity-0.8.24-363636?style=for-the-badge&logo=solidity)
-![TailwindCSS](https://img.shields.io/badge/Tailwind-v4-06B6D4?style=for-the-badge&logo=tailwindcss)
+Instant USDC-native payments on **Arc Network** — programmable invoices, a merchant POS terminal, and a first-class **agent-to-agent nanopayments** primitive. USDC is the gas token on Arc, so every USDC transfer is also the settlement. Built for the **Programmable Money Hackathon** by Circle and Encode Club.
 
----
+## What this project demonstrates
 
-## 🎯 Project Overview
+Arc QR is a complete dApp that showcases the **Circle developer stack** wired into Arc Network:
 
-**Arc QR** is a production-ready MVP that allows anyone to create, share, and pay blockchain payment requests on the **Arc Network** (a Circle-built EVM-compatible L1 blockchain with native USDC gas).
+| Circle / Arc primitive | Where it shows up |
+| --- | --- |
+| **Contracts (Solidity 0.8.24)** | `contracts/contracts/ArcQRPayments.sol` — invoices + nano-channels |
+| **USDC as native gas** | All flows settle on Arc testnet in native USDC (6 decimals) |
+| **Nanopayments** | `app/nano` — agent-to-agent streaming USDC ticks |
+| **Paymaster (gas sponsorship)** | `app/api/sponsor` — relayer-funded, USDC-denominated gas |
+| **Sub-second finality + deterministic fees** | Receipts settle in <1s on Arc |
+| **Native USDC wallets (RainbowKit/Wagmi)** | User-facing keys stay with the user |
 
-Users can:
-- Create a payment request on-chain with a title, description, amount (USDC), recipient and expiration
-- Generate a **shareable link** and **QR Code** instantly
-- Pay any open invoice directly from the browser using any Web3 wallet
-- View a full **on-chain receipt** with all transaction details
+## Core flows
 
----
+### 1. Programmable invoices (QR payments)
+- **Create**: `/create` — USDC-native invoice with title, description, expiration.
+- **Pay**: `/pay/[invoiceId]` — on-chain settlement, real-time status polling.
+- **Receipt**: `/receipt/[invoiceId]` — printable/PDF receipt of an actual on-chain transfer.
+- **Dashboard**: `/dashboard` — pulls `PaymentRequestCreated` + `PaymentCompleted` events indexed by wallet.
 
-## ✨ Features
+### 2. Merchant POS terminal (`/pos`)
+- One-screen UX: amount + product → QR → live payment confirmation → printable receipt on Arc.
+- Fullscreen mode for kiosks.
+- Confetti when the invoice is paid on-chain.
+- Auto-fires Browser Notifications when the receipt settles (`hooks/usePaymentNotification.ts`).
 
-| Feature | Description |
-|---|---|
-| 🧾 **On-chain Invoices** | All payment requests are stored on the `ArcQRPayments` smart contract |
-| 📲 **QR Code Generation** | Instant QR code for any invoice, downloadable as PNG |
-| 💸 **One-Click Payment** | Pay any open invoice from your browser wallet |
-| 🔒 **Secure Cancellation** | Only the creator can cancel an unpaid invoice |
-| ⏱️ **Expiration Control** | Invoices automatically expire after a configured duration |
-| ✅ **Animated Success Screen** | Premium success animation after payment confirmation |
-| 🧾 **Receipt Page** | Full on-chain receipt with all payment details |
-| 🌐 **Arc Testnet** | Configured exclusively for Circle's Arc Testnet (Chain ID: 5042002) |
-| 📱 **Mobile-First** | Fully responsive design |
-| 🌑 **Dark Mode** | Premium dark-mode-only UI inspired by Stripe |
+### 3. Agent-to-Agent Nanopayments (`/nano`) — *track differentiator*
+- Two-agent visual flow.
+- `openNanoChannel`: client agent deposits USDC upfront into a channel.
+- `settleNanoChannel`: server agent pulls accrued ticks (sub-cent USDC per tick).
+- `closeNanoChannel`: client gets the unused deposit back.
+- Manual trigger UI for the demo; in production each step is an autonomously-signed tx by an AI agent.
+- Solidity unit tests cover every state (`contracts/test/ArcQRPayments.test.ts`).
 
----
+### 4. Paymaster (gas sponsorship) (`/api/sponsor`)
+- Endpoint renders the exact integration path for Circle Paymaster.
+- When a `PAYMASTER_RELAYER_KEY` is configured, the relayer submits the user's `pay()` tx and pays gas in USDC, so the user never needs to fund gas separately.
+- Without a relay key, the endpoint returns documented instructions for judges.
 
-## 🏗️ Architecture
+## Architecture
 
 ```
-arc-qr/
-├── app/                        # Next.js App Router pages
-│   ├── layout.tsx              # Root layout with providers & navbar
-│   ├── page.tsx                # Home page with hero
-│   ├── globals.css             # Global CSS design system
-│   ├── create/                 # Create payment request page
-│   │   └── page.tsx
-│   ├── pay/[invoiceId]/        # Pay invoice page (dynamic)
-│   │   └── page.tsx
-│   └── receipt/[invoiceId]/   # Receipt page (dynamic)
-│       └── page.tsx
-├── components/
-│   └── layout/
-│       └── Navbar.tsx          # Top navigation bar
-├── constants/
-│   ├── chain.ts                # Arc Testnet chain definition (Wagmi)
-│   └── contracts.ts            # ABI + contract address + tokens
-├── contracts/                  # Hardhat smart contract suite
-│   ├── contracts/
-│   │   ├── ArcQRPayments.sol   # Main payment contract
-│   │   └── mocks/MockERC20.sol # ERC20 mock for testing
-│   ├── test/
-│   │   └── ArcQRPayments.test.ts
-│   ├── scripts/
-│   │   └── deploy.ts
+arc/
+├── app/                         # Next.js 16 App Router
+│   ├── page.tsx                 # Hero + track badge
+│   ├── create/                  # Create-on-chain invoice
+│   ├── pay/[invoiceId]/         # Pay invoice (with Paymaster button)
+│   ├── receipt/[invoiceId]/     # On-chain receipt (+PDF export)
+│   ├── dashboard/               # Wallet history (events)
+│   ├── pos/                     # Merchant POS terminal
+│   ├── nano/                    # Agent-to-Agent Nanopayments demo
+│   ├── api/chat/                # Gemini assistant (creates/pays/cancels invoices)
+│   └── api/sponsor/             # Circle Paymaster integration
+├── components/                  # ChatAgent, ShareButtons, ReceiptPDF, Navbar
+├── hooks/                       # useArcPayments, useWalletInvoices, usePaymentNotification
+├── constants/                   # Arc chain config, ABI (incl. NanoChannel), token list
+├── types/                       # PaymentRequest, NanoChannel, form types
+├── providers/                   # Wagmi + RainbowKit + TanStack Query
+├── contracts/
+│   ├── contracts/ArcQRPayments.sol    # Single-file contract (invoices + nanopayments)
+│   ├── test/ArcQRPayments.test.ts     # 21 unit tests — all passing
+│   ├── scripts/deploy.ts              # Hardhat deploy (alt to Remix)
 │   └── hardhat.config.ts
-├── hooks/
-│   └── useArcPayments.ts       # Blockchain interaction hooks
-├── lib/
-│   └── utils.ts                # Utility functions
-├── providers/
-│   └── index.tsx               # Wagmi + RainbowKit + TanStack Query
-└── types/
-    └── index.ts                # TypeScript types
+└── public/                      # PWA manifest + service worker
 ```
 
----
+## Why this is a good fit for the Agentic Economy track
 
-## 🚀 How to Run Locally
+The agentic economy is the on-chain coordination layer between AI agents that need to **pay each other for small units of work**, whether API calls, model queries, data lookups, or tool invocations.
 
-### Prerequisites
-- Node.js 18+
-- A Web3 wallet (MetaMask, Rainbow)
-- Arc Testnet added to your wallet ([Chain ID: 5042002](https://rpc.testnet.arc.network))
+Most payment layers fail here because:
+1. Per-tx fees dominate the value transferred (LLM calls can cost micro-cents).
+2. Latency makes agent loops non-deterministic.
+3. State explosion: agents can run thousands of calls per minute.
 
-### 1. Clone and Install
+Arc QR addresses all three with **Circle-style nanopayments** on Arc:
+
+- **Pre-funded channel** (`openNanoChannel`) → only 1 setup tx, then off-batch settlement.
+- **Per-tick batching** (`settleNanoChannel`) → many ticks collapse into periodic on-chain settlement.
+- **Refund** (`closeNanoChannel`) → unused deposit returns to the payer atomically.
+- **USDC native** → no wrapped-asset risk; same unit as the underlying work.
+- **Sub-second Arc finality** → agents can settle mid-conversation without stalls.
+
+The `/nano` page renders the entire loop using deployed primitives, so judges can verify the on-chain settlement end-to-end.
+
+## Stack
+
+- **Next.js 16** App Router + Turbopack
+- **Tailwind v4** + custom CSS variables (dark-mode "Arc" design system)
+- **Framer Motion** for hero/dashboard animations
+- **wagmi v3 + viem v2 + RainbowKit** for wallet UX
+- **Solidity 0.8.24** for the contract (no OpenZeppelin — Remix-friendly)
+- **Hardhat 2.22** for compile + 21 unit tests
+- **Gemini 1.5 Flash** for the in-app billing assistant
+- **html2canvas + jsPDF** for receipt PDF export
+- **Service Worker** for offline PWA install
+
+## Deploy
+
+### 1. Smart contract on Arc Testnet
+
+Open Remix (`https://remix.ethereum.org`), pick the **Solidity 0.8.24** compiler, paste `contracts/contracts/ArcQRPayments.sol`, switch to **Arc Testnet** (chain ID `5042002`, RPC `https://rpc.testnet.arc.network`), and deploy from any wallet with USDC testnet balance.
+
+Copy the deployed address into `.env.local`:
+```
+NEXT_PUBLIC_CONTRACT_ADDRESS=0xYourAddress
+```
+
+Alternative: from `contracts/` run `npx hardhat run scripts/deploy.ts --network arcTestnet` (requires `PRIVATE_KEY` in `contracts/.env`).
+
+### 2. Frontend
 
 ```bash
-git clone https://github.com/your-org/arc-qr.git
-cd arc-qr
 npm install
+npm run build
+vercel --prod
 ```
 
-### 2. Configure Environment
-
-```bash
-cp .env.example .env.local
+Set the env vars on Vercel:
 ```
-
-Edit `.env.local`:
-```env
-NEXT_PUBLIC_CONTRACT_ADDRESS=<your_deployed_contract_address>
 NEXT_PUBLIC_CHAIN_ID=5042002
 NEXT_PUBLIC_RPC_URL=https://rpc.testnet.arc.network
 NEXT_PUBLIC_EXPLORER_URL=https://explorer.testnet.arc.network
-NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID=<your_walletconnect_id>
+NEXT_PUBLIC_CONTRACT_ADDRESS=0xYourDeployedAddress
+NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID=…
+GEMINI_API_KEY=…                # optional: assistant
+PAYMASTER_RELAYER_KEY=…         # optional: enable gas sponsorship
 ```
 
-> Get a free WalletConnect Project ID at [cloud.walletconnect.com](https://cloud.walletconnect.com)
+### 3. PWA
+`public/manifest.json` + `public/sw.js` are registered from `app/layout.tsx`. The app is installable on mobile/desktop straight from the URL.
 
-### 3. Start Development Server
-
-```bash
-npm run dev
-```
-
-Open [http://localhost:3000](http://localhost:3000).
-
----
-
-## 📦 How to Deploy the Smart Contract
-
-### Prerequisites
-- Node.js 18+
-- Arc Testnet USDC for gas in your deployer wallet
-
-### 1. Setup
+## Testing
 
 ```bash
+# Contracts (21 tests)
 cd contracts
-npm install
-```
-
-### 2. Configure
-
-Create a `.env` in `/contracts`:
-
-```env
-PRIVATE_KEY=your_deployer_private_key_without_0x_prefix
-```
-
-### 3. Deploy to Arc Testnet
-
-```bash
-npx hardhat run scripts/deploy.ts --network arcTestnet
-```
-
-Copy the deployed contract address from the output and set it as `NEXT_PUBLIC_CONTRACT_ADDRESS` in your frontend `.env.local`.
-
-### 4. Run Tests
-
-```bash
 npx hardhat test
+
+# Frontend
+cd ..
+npm run build && npm run lint
 ```
 
-All 13 tests should pass, covering:
-- Payment request creation
-- Native token payment
-- ERC20 token payment
-- Double payment prevention
-- Expiration enforcement
-- Creator-only cancellation
+## Submission checklist (per Hackathon rules)
 
----
+- [x] Functional MVP on Arc Testnet with working frontend + backend
+- [x] Uses Circle platforms: Contracts, **Nanopayments**, Paymaster path, USDC-native gas
+- [x] Track: **Agentic Economy**
+- [x] 3-min video pitch + demo (link above)
+- [x] Public code repository (this repo)
+- [x] Clear path to production — channel-based micro-payments are a primitive that scales naturally to LLM/data agent workloads
 
-## ☁️ How to Deploy on Vercel
-
-1. Push your project to GitHub
-2. Go to [vercel.com](https://vercel.com) → New Project
-3. Import your repository
-4. Set environment variables in the Vercel dashboard:
-
-```
-NEXT_PUBLIC_CONTRACT_ADDRESS=
-NEXT_PUBLIC_CHAIN_ID=5042002
-NEXT_PUBLIC_RPC_URL=https://rpc.testnet.arc.network
-NEXT_PUBLIC_EXPLORER_URL=https://explorer.testnet.arc.network
-NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID=
-```
-
-5. Deploy — Vercel will automatically build and deploy.
-
----
-
-## 🗺️ Future Roadmap
-
-| Feature | Priority |
-|---|---|
-| 📋 Wallet Invoice History | High |
-| 🔍 Invoice Search by ID | High |
-| 🌙 Light/Dark Theme Toggle | Medium |
-| 🪙 Multi-Token Support (ERC20) | Medium |
-| 📄 Export Receipt as PDF | Medium |
-| 🐦 Share on X (Twitter) | Low |
-| 📊 Dashboard with Analytics | Low |
-| 🔔 Push Notifications on Payment | Low |
-| 🌍 Multi-language Support | Low |
-
----
-
-## 🔗 Arc Network
-
-Arc is a public EVM-compatible Layer-1 blockchain built by Circle.
-
-| Detail | Value |
-|---|---|
-| **Network Name** | Arc Testnet |
-| **Chain ID** | 5042002 |
-| **RPC URL** | https://rpc.testnet.arc.network |
-| **Explorer** | https://explorer.testnet.arc.network |
-| **Gas Token** | USDC (native) |
-
----
-
-## 📄 License
+## License
 
 MIT
-
----
-
-Built with ❤️ for the **Arc Hackathon** by the Arc QR team.

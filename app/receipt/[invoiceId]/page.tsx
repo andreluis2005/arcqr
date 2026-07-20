@@ -16,6 +16,7 @@ import QRCode from "qrcode";
 import { useState, useEffect } from "react";
 import { usePaymentRequest } from "@/hooks/useArcPayments";
 import { ZERO_ADDRESS } from "@/constants/contracts";
+import ReceiptPDF from "@/components/ReceiptPDF";
 import {
   formatAddress,
   formatAmount,
@@ -114,6 +115,7 @@ export default function ReceiptPage() {
       </Link>
 
       <motion.div
+        id="receipt-card"
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.4 }}
@@ -168,7 +170,7 @@ export default function ReceiptPage() {
           }}
         >
           <div style={{ color: "var(--text-secondary)", fontSize: "12px", marginBottom: "6px" }}>
-            VALOR
+            AMOUNT
           </div>
           <div
             className={status === "paid" ? "" : "gradient-text"}
@@ -302,6 +304,7 @@ export default function ReceiptPage() {
 
         {/* Footer actions */}
         <div
+          data-pdf-ignore
           style={{
             padding: "20px 28px",
             display: "flex",
@@ -328,6 +331,11 @@ export default function ReceiptPage() {
           </a>
         </div>
       </motion.div>
+
+      {/* PDF Export Button */}
+      <div style={{ marginTop: "16px", display: "flex" }}>
+        <ReceiptPDF elementId="receipt-card" invoiceId={invoiceId} />
+      </div>
     </div>
   );
 }

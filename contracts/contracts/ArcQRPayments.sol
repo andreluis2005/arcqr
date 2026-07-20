@@ -1,39 +1,42 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-
 /**
  * @title ArcQRPayments
- * @dev Contrato para criação, pagamento e cancelamento de cobranças em blockchain na rede Arc.
+ * @author Arc QR — Programmable Money Hackathon (Encode Club + Circle)
+ * @notice Pagamentos on-chain USDC-nativos na Arc Network, com suporte a
+ *         invoices QR-coded E um módulo de nanopayments (streaming/micro-ticks)
+ *         entre agentes de IA — track Agentic Economy.
+ *
+ * Design notes:
+ *  - Na Arc Network, USDC é a moeda nativa (gas token). Logo `address(0)` é USDC nativo.
+ *  - Nanopayments usam o mesmo canal: payer deposita USDC nativo; receiver saca ticks
+ *    acumulados on-chain a cada `intervalSeconds` (state-channel simplificado).
+ *  - Compilável direto no Remix (sem imports externos).
  */
-contract ArcQRPayments is ReentrancyGuard {
-    using SafeERC20 for IERC20;
+contract ArcQRPayments {
+    // ============================================================
+    //  PAYMENT REQUESTS (QR-coded invoices)
+    // ============================================================
 
     struct PaymentRequest {
         bytes32 invoiceId;
         address creator;
         address recipient;
-        address token; // address(0) para moeda nativa (ex: USDC na Arc), caso contrário ERC-20
+        address token; // address(0) = USDC nativo (Arc). Outros = ERC20.
         uint256 amount;
-        string title;
-        string description;
+        string  title;
+        string  description;
         uint256 createdAt;
         uint256 expiresAt;
-        bool paid;
-        bool cancelled;
+        bool    paid;
+        bool    cancelled;
         address payer;
     }
 
-    // Mapeamento de invoiceId para PaymentRequest
     mapping(bytes32 => PaymentRequest) private _requests;
-    
-    // Contador para garantir unicidade do invoiceId
-    uint256 private _nonce;
+    uint256 private _invoiceNonce;
 
-    // Eventos
     event PaymentRequestCreated(
         bytes32 indexed invoiceId,
         address indexed creator,
@@ -51,22 +54,11 @@ contract ArcQRPayments is ReentrancyGuard {
     );
     event PaymentCancelled(bytes32 indexed invoiceId);
 
-    // Modificadores
     modifier onlyCreator(bytes32 invoiceId) {
-        require(_requests[invoiceId].creator == msg.sender, "Only creator can cancel");
+        require(_requests[invoiceId].creator == msg.sender, "Only creator");
         _;
     }
 
-    /**
-     * @dev Cria uma solicitação de pagamento.
-     * @param recipient Endereço que receberá os fundos.
-     * @param token Endereço do token ERC-20 (ou address(0) para moeda nativa).
-     * @param amount Quantidade a ser paga.
-     * @param title Título da cobrança.
-     * @param description Descrição detalhada da cobrança.
-     * @param durationInSeconds Tempo de expiração em segundos a partir do momento atual.
-     * @return invoiceId O ID gerado para a cobrança.
-     */
     function createPaymentRequest(
         address recipient,
         address token,
@@ -75,99 +67,239 @@ contract ArcQRPayments is ReentrancyGuard {
         string calldata description,
         uint256 durationInSeconds
     ) external returns (bytes32) {
-        require(recipient != address(0), "Recipient cannot be zero address");
-        require(amount > 0, "Amount must be greater than zero");
-        require(durationInSeconds > 0, "Duration must be greater than zero");
+        require(recipient != address(0), "Recipient=0");
+        require(amount > 0, "Amount=0");
+        require(durationInSeconds > 0, "Duration=0");
 
-        _nonce++;
+        _invoiceNonce++;
         bytes32 invoiceId = keccak256(
-            abi.encodePacked(msg.sender, recipient, amount, _nonce, block.timestamp)
+            abi.encodePacked(msg.sender, recipient, amount, _invoiceNonce, block.timestamp)
         );
 
-        uint256 createdAt = block.timestamp;
-        uint256 expiresAt = createdAt + durationInSeconds;
+        uint256 expiresAt = block.timestamp + durationInSeconds;
 
         _requests[invoiceId] = PaymentRequest({
             invoiceId: invoiceId,
-            creator: msg.sender,
+            creator:   msg.sender,
             recipient: recipient,
-            token: token,
-            amount: amount,
-            title: title,
+            token:     token,
+            amount:    amount,
+            title:     title,
             description: description,
-            createdAt: createdAt,
+            createdAt: block.timestamp,
             expiresAt: expiresAt,
-            paid: false,
+            paid:      false,
             cancelled: false,
-            payer: address(0)
+            payer:     address(0)
         });
 
-        emit PaymentRequestCreated(
-            invoiceId,
-            msg.sender,
-            recipient,
-            token,
-            amount,
-            title,
-            expiresAt
-        );
-
+        emit PaymentRequestCreated(invoiceId, msg.sender, recipient, token, amount, title, expiresAt);
         return invoiceId;
     }
 
-    /**
-     * @dev Efetua o pagamento de uma cobrança ativa.
-     * @param invoiceId O ID da cobrança.
-     */
-    function pay(bytes32 invoiceId) external payable nonReentrant {
-        PaymentRequest storage request = _requests[invoiceId];
+    function pay(bytes32 invoiceId) external payable {
+        PaymentRequest storage r = _requests[invoiceId];
+        require(r.invoiceId != bytes32(0), "Not found");
+        require(!r.paid, "Paid");
+        require(!r.cancelled, "Cancelled");
+        require(block.timestamp <= r.expiresAt, "Expired");
 
-        require(request.invoiceId != bytes32(0), "Payment request does not exist");
-        require(!request.paid, "Already paid");
-        require(!request.cancelled, "Payment request cancelled");
-        require(block.timestamp <= request.expiresAt, "Payment request expired");
+        r.paid = true;
+        r.payer = msg.sender;
 
-        request.paid = true;
-        request.payer = msg.sender;
-
-        if (request.token == address(0)) {
-            // Pagamento com moeda nativa da rede (e.g. USDC nativo na rede Arc ou ETH na testnet)
-            require(msg.value == request.amount, "Incorrect payment amount");
-            
-            (bool success, ) = request.recipient.call{value: msg.value}("");
-            require(success, "Native transfer failed");
+        if (r.token == address(0)) {
+            require(msg.value == r.amount, "Wrong amount");
+            (bool ok, ) = r.recipient.call{value: msg.value}("");
+            require(ok, "Transfer fail");
         } else {
-            // Pagamento com token ERC-20 específico
-            require(msg.value == 0, "Do not send native tokens with ERC-20 payment");
-            
-            IERC20(request.token).safeTransferFrom(msg.sender, request.recipient, request.amount);
+            require(msg.value == 0, "Don't send native");
+            _transferFromERC20(r.token, msg.sender, r.recipient, r.amount);
         }
 
-        emit PaymentCompleted(invoiceId, msg.sender, request.recipient, request.amount);
+        emit PaymentCompleted(invoiceId, msg.sender, r.recipient, r.amount);
     }
 
-    /**
-     * @dev Cancela uma cobrança não paga. Somente o criador pode realizar o cancelamento.
-     * @param invoiceId O ID da cobrança.
-     */
     function cancel(bytes32 invoiceId) external onlyCreator(invoiceId) {
-        PaymentRequest storage request = _requests[invoiceId];
-        
-        require(!request.paid, "Cannot cancel a paid request");
-        require(!request.cancelled, "Already cancelled");
-
-        request.cancelled = true;
-
+        PaymentRequest storage r = _requests[invoiceId];
+        require(!r.paid, "Already paid");
+        require(!r.cancelled, "Already cancelled");
+        r.cancelled = true;
         emit PaymentCancelled(invoiceId);
     }
 
-    /**
-     * @dev Retorna os detalhes de uma solicitação de pagamento.
-     * @param invoiceId O ID da cobrança.
-     * @return Os dados da struct PaymentRequest.
-     */
     function getRequest(bytes32 invoiceId) external view returns (PaymentRequest memory) {
-        require(_requests[invoiceId].invoiceId != bytes32(0), "Payment request does not exist");
+        require(_requests[invoiceId].invoiceId != bytes32(0), "Not found");
         return _requests[invoiceId];
+    }
+
+    // ============================================================
+    //  NANOPAYMENTS — agent-to-agent micro streams
+    // ============================================================
+    //
+    //  Resumão: o payer abre um canal depositando USDC nativo. Cada `intervalSeconds`,
+    //  o receiver (ou qualquer parte) chama `settleNanoChannel` para sacar a quantia
+    //  acumulada de ticks. O canal pode ser fechado a qualquer momento, devolvendo
+    //  o saldo restante ao payer.
+    //
+    //  Caso de uso: agentes IA consumindo API de outro agente. Em vez de pagar
+    //  por request HTTP (caro + latência), eles abrem 1 canal e cobram 0.0001 USDC
+    //  por tick (segundo). Settlement é batch e atômica on-chain.
+
+    struct NanoChannel {
+        address payer;
+        address receiver;
+        address token;        // address(0) = USDC nativo Arc
+        uint256 deposit;
+        uint256 withdrawn;
+        uint256 ratePerTick;    // wei (USDC = 6 decimals)
+        uint256 intervalSeconds;
+        uint256 lastTickAt;
+        uint256 openedAt;
+        bool    closed;
+    }
+
+    uint256 private _channelNonce;
+    mapping(bytes32 => NanoChannel) private _channels;
+
+    event NanoChannelOpened(
+        bytes32 indexed channelId,
+        address indexed payer,
+        address indexed receiver,
+        address token,
+        uint256 deposit,
+        uint256 ratePerTick,
+        uint256 intervalSeconds
+    );
+    event NanoTickSettled(
+        bytes32 indexed channelId,
+        address indexed receiver,
+        uint256 amount,
+        uint256 totalWithdrawn
+    );
+    event NanoChannelClosed(
+        bytes32 indexed channelId,
+        address indexed payer,
+        uint256 refunded
+    );
+
+    function openNanoChannel(
+        address receiver,
+        address token,
+        uint256 ratePerTick,
+        uint256 intervalSeconds,
+        uint256 durationInSeconds
+    ) external payable returns (bytes32) {
+        require(receiver != address(0), "Receiver=0");
+        require(ratePerTick > 0, "Rate=0");
+        require(intervalSeconds > 0, "Interval=0");
+        require(durationInSeconds >= intervalSeconds, "Dur<Interval");
+
+        uint256 ticks = durationInSeconds / intervalSeconds;
+        uint256 deposit = ratePerTick * ticks;
+
+        if (token == address(0)) {
+            require(msg.value == deposit, "Wrong deposit");
+        } else {
+            require(msg.value == 0, "No native w/ ERC20");
+            _transferFromERC20(token, msg.sender, address(this), deposit);
+        }
+
+        _channelNonce++;
+        bytes32 channelId = keccak256(
+            abi.encodePacked(msg.sender, receiver, ratePerTick, _channelNonce, block.timestamp)
+        );
+
+        _channels[channelId] = NanoChannel({
+            payer:           msg.sender,
+            receiver:        receiver,
+            token:           token,
+            deposit:         deposit,
+            withdrawn:       0,
+            ratePerTick:     ratePerTick,
+            intervalSeconds: intervalSeconds,
+            lastTickAt:      block.timestamp,
+            openedAt:        block.timestamp,
+            closed:          false
+        });
+
+        emit NanoChannelOpened(channelId, msg.sender, receiver, token, deposit, ratePerTick, intervalSeconds);
+        return channelId;
+    }
+
+    function settleNanoChannel(bytes32 channelId) external {
+        NanoChannel storage ch = _channels[channelId];
+        require(ch.payer != address(0), "Not found");
+        require(!ch.closed, "Closed");
+
+        uint256 elapsed = block.timestamp - ch.lastTickAt;
+        uint256 newTicks = elapsed / ch.intervalSeconds;
+        if (newTicks == 0) return;
+
+        uint256 owed = newTicks * ch.ratePerTick;
+        uint256 remaining = ch.deposit - ch.withdrawn;
+        if (owed > remaining) owed = remaining;
+
+        ch.withdrawn   += owed;
+        ch.lastTickAt  += newTicks * ch.intervalSeconds;
+
+        if (ch.token == address(0)) {
+            (bool ok, ) = ch.receiver.call{value: owed}("");
+            require(ok, "Settle fail");
+        } else {
+            _transferERC20(ch.token, ch.receiver, owed);
+        }
+
+        emit NanoTickSettled(channelId, ch.receiver, owed, ch.withdrawn);
+    }
+
+    function closeNanoChannel(bytes32 channelId) external {
+        NanoChannel storage ch = _channels[channelId];
+        require(ch.payer != address(0), "Not found");
+        require(!ch.closed, "Closed");
+        require(msg.sender == ch.payer || msg.sender == ch.receiver, "Not party");
+
+        ch.closed = true;
+        uint256 leftover = ch.deposit - ch.withdrawn;
+        if (leftover > 0) {
+            if (ch.token == address(0)) {
+                (bool ok, ) = ch.payer.call{value: leftover}("");
+                require(ok, "Refund fail");
+            } else {
+                _transferERC20(ch.token, ch.payer, leftover);
+            }
+        }
+
+        emit NanoChannelClosed(channelId, ch.payer, leftover);
+    }
+
+    function getNanoChannel(bytes32 channelId) external view returns (NanoChannel memory) {
+        return _channels[channelId];
+    }
+
+    function estimateOwed(bytes32 channelId) external view returns (uint256 newTicks, uint256 owed) {
+        NanoChannel storage ch = _channels[channelId];
+        if (ch.payer == address(0) || ch.closed) return (0, 0);
+        uint256 elapsed = block.timestamp - ch.lastTickAt;
+        newTicks = elapsed / ch.intervalSeconds;
+        uint256 remaining = ch.deposit - ch.withdrawn;
+        owed = newTicks * ch.ratePerTick;
+        if (owed > remaining) owed = remaining;
+    }
+
+    // ============================================================
+    //  Minimal ERC20 helper (no OZ import — Remix-friendly)
+    // ============================================================
+    function _transferERC20(address token, address to, uint256 amount) internal {
+        (bool ok, bytes memory data) = token.call(
+            abi.encodeWithSignature("transfer(address,uint256)", to, amount)
+        );
+        require(ok && (data.length == 0 || abi.decode(data, (bool))), "ERC20 transfer fail");
+    }
+
+    function _transferFromERC20(address token, address from, address to, uint256 amount) internal {
+        (bool ok, bytes memory data) = token.call(
+            abi.encodeWithSignature("transferFrom(address,address,uint256)", from, to, amount)
+        );
+        require(ok && (data.length == 0 || abi.decode(data, (bool))), "ERC20 transferFrom fail");
     }
 }

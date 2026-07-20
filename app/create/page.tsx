@@ -12,7 +12,8 @@ import QRCode from "qrcode";
 import { useCreatePaymentRequest } from "@/hooks/useArcPayments";
 import { TOKENS, ZERO_ADDRESS } from "@/constants/contracts";
 import { ARC_TESTNET } from "@/constants/chain";
-import { generatePayUrl } from "@/lib/utils";
+import { formatAmount, generatePayUrl } from "@/lib/utils";
+import ShareButtons from "@/components/ShareButtons";
 import { CreatePaymentFormData } from "@/types";
 
 const schema = z.object({
@@ -53,6 +54,7 @@ export default function CreatePage() {
   const {
     register,
     handleSubmit,
+    watch,
     formState: { errors },
     reset,
   } = useForm<FormData>({
@@ -66,6 +68,8 @@ export default function CreatePage() {
 
   const isWrongNetwork = isConnected && chainId !== ARC_TESTNET.id;
   const isLoading = isPending || isConfirming;
+
+  const watchedAmount = watch("amount");
 
   const onSubmit = async (data: FormData) => {
     setError(null);
@@ -231,7 +235,7 @@ export default function CreatePage() {
           </div>
 
           {/* Action buttons */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", marginBottom: "12px" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", marginBottom: "16px" }}>
             <button className="btn-secondary" onClick={copyLink} style={{ justifyContent: "center" }}>
               <Copy size={15} />
               {copySuccess ? "Copied!" : "Copy Link"}
@@ -241,6 +245,13 @@ export default function CreatePage() {
               Download QR
             </button>
           </div>
+
+          {/* Share buttons: WhatsApp / Telegram / X / Email */}
+          <ShareButtons
+            invoiceId={invoiceId}
+            title="Payment request"
+            amount={watchedAmount || ""}
+          />
 
           <a
             href={`/pay/${invoiceId}`}
@@ -258,13 +269,14 @@ export default function CreatePage() {
               textDecoration: "none",
               fontSize: "14px",
               fontWeight: 600,
+              marginTop: "12px",
               marginBottom: "16px",
               background: "rgba(124, 58, 237, 0.05)",
               transition: "all 0.2s ease",
             }}
           >
             <ExternalLink size={15} />
-            View Payment Page
+            Open Payment Page
           </a>
 
           <button
@@ -273,7 +285,7 @@ export default function CreatePage() {
             style={{ width: "100%", justifyContent: "center" }}
           >
             <Plus size={15} />
-            Create Another Request
+            Create Another
           </button>
         </motion.div>
       </div>

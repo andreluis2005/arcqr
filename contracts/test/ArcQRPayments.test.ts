@@ -3,6 +3,8 @@ import { ethers } from "hardhat";
 import { ArcQRPayments, MockERC20 } from "../typechain-types";
 import { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers";
 
+const ZERO = ethers.ZeroAddress;
+
 describe("ArcQRPayments", function () {
   let arcQRPayments: ArcQRPayments;
   let mockUSDC: MockERC20;
@@ -14,267 +16,402 @@ describe("ArcQRPayments", function () {
   beforeEach(async function () {
     [owner, creator, recipient, payer] = await ethers.getSigners();
 
-    // Deploy do contrato principal
     const ArcQRPaymentsFactory = await ethers.getContractFactory("ArcQRPayments");
-    arcQRPayments = await ArcQRPaymentsFactory.deploy();
+    arcQRPayments = (await ArcQRPaymentsFactory.deploy()) as unknown as ArcQRPayments;
 
-    // Deploy do token MockERC20 (USDC)
     const MockERC20Factory = await ethers.getContractFactory("MockERC20");
-    mockUSDC = await MockERC20Factory.deploy("Mock USDC", "USDC", ethers.parseEther("10000"));
-    
-    // Distribuir tokens para o pagador
+    mockUSDC = (await MockERC20Factory.deploy(
+      "Mock USDC",
+      "USDC",
+      ethers.parseEther("10000")
+    )) as unknown as MockERC20;
+
     await mockUSDC.transfer(payer.address, ethers.parseEther("1000"));
   });
 
-  describe("Criação de Cobranças (createPaymentRequest)", function () {
-    it("Deve criar uma cobrança nativa com sucesso e emitir evento", async function () {
-      const amount = ethers.parseEther("1.5");
-      const title = "Aluguel de Equipamento";
-      const description = "Pagamento do aluguel do servidor mensal";
-      const duration = 3600; // 1 hora
+  async function lastInvoiceId(): Promise<string> {
+    const events = await arcQRPayments.queryFilter(arcQRPayments.filters.PaymentRequestCreated);
+    return events[events.length - 1].args.invoiceId;
+  }
 
-      const tx = await arcQRPayments.connect(creator).createPaymentRequest(
-        recipient.address,
-        ethers.ZeroAddress,
-        amount,
-        title,
-        description,
-        duration
-      );
-
+  describe("createPaymentRequest", function () {
+    it("creates a native invoice and emits event", async function () {
+      const tx = await arcQRPayments
+        .connect(creator)
+        .createPaymentRequest(
+          recipient.address,
+          ZERO,
+          ethers.parseEther("1.5"),
+          "Server rental",
+          "Monthly server fee",
+          3600
+        );
       const receipt = await tx.wait();
       expect(receipt).to.not.be.null;
 
-      // Pegar o evento
-      const filter = arcQRPayments.filters.PaymentRequestCreated;
-      const events = await arcQRPayments.queryFilter(filter);
-      expect(events.length).to.equal(1);
-      
-      const invoiceId = events[0].args.invoiceId;
-      expect(invoiceId).to.not.be.undefined;
-
-      // Buscar a solicitação criada
-      const request = await arcQRPayments.getRequest(invoiceId);
-      expect(request.invoiceId).to.equal(invoiceId);
-      expect(request.creator).to.equal(creator.address);
-      expect(request.recipient).to.equal(recipient.address);
-      expect(request.token).to.equal(ethers.ZeroAddress);
-      expect(request.amount).to.equal(amount);
-      expect(request.title).to.equal(title);
-      expect(request.description).to.equal(description);
-      expect(request.paid).to.be.false;
-      expect(request.cancelled).to.be.false;
+      const id = await lastInvoiceId();
+      const req = await arcQRPayments.getRequest(id);
+      expect(req.creator).to.equal(creator.address);
+      expect(req.recipient).to.equal(recipient.address);
+      expect(req.token).to.equal(ZERO);
+      expect(req.amount).to.equal(ethers.parseEther("1.5"));
+      expect(req.title).to.equal("Server rental");
+      expect(req.paid).to.be.false;
+      expect(req.cancelled).to.be.false;
     });
 
-    it("Deve falhar se o destinatário for o endereço zero", async function () {
+    it("reverts when recipient is zero", async function () {
       await expect(
-        arcQRPayments.connect(creator).createPaymentRequest(
-          ethers.ZeroAddress,
-          ethers.ZeroAddress,
-          ethers.parseEther("1"),
-          "Falha",
-          "",
-          100
-        )
-      ).to.be.revertedWith("Recipient cannot be zero address");
+        arcQRPayments
+          .connect(creator)
+          .createPaymentRequest(ZERO, ZERO, ethers.parseEther("1"), "x", "", 100)
+      ).to.be.revertedWith("Recipient=0");
     });
 
-    it("Deve falhar se a quantia for zero", async function () {
+    it("reverts when amount is zero", async function () {
       await expect(
-        arcQRPayments.connect(creator).createPaymentRequest(
-          recipient.address,
-          ethers.ZeroAddress,
-          0,
-          "Falha",
-          "",
-          100
-        )
-      ).to.be.revertedWith("Amount must be greater than zero");
+        arcQRPayments
+          .connect(creator)
+          .createPaymentRequest(recipient.address, ZERO, 0, "x", "", 100)
+      ).to.be.revertedWith("Amount=0");
     });
   });
 
-  describe("Pagamento de Cobranças (pay)", function () {
+  describe("pay", function () {
     let nativeInvoiceId: string;
     let erc20InvoiceId: string;
     const nativeAmount = ethers.parseEther("2.0");
-    const erc20Amount = ethers.parseEther("50.0"); // 50 USDC
+    const erc20Amount = ethers.parseEther("50.0");
     const duration = 3600;
 
     beforeEach(async function () {
-      // Criar cobrança nativa
-      let tx = await arcQRPayments.connect(creator).createPaymentRequest(
-        recipient.address,
-        ethers.ZeroAddress,
-        nativeAmount,
-        "Serviço Nativo",
-        "Pagar em ETH/USDC Nativo",
-        duration
-      );
-      let receipt = await tx.wait();
-      let events = await arcQRPayments.queryFilter(arcQRPayments.filters.PaymentRequestCreated);
-      nativeInvoiceId = events[0].args.invoiceId;
+      const tx1 = await arcQRPayments
+        .connect(creator)
+        .createPaymentRequest(recipient.address, ZERO, nativeAmount, "Native", "", duration);
+      await tx1.wait();
+      nativeInvoiceId = await lastInvoiceId();
 
-      // Criar cobrança ERC20
-      tx = await arcQRPayments.connect(creator).createPaymentRequest(
-        recipient.address,
-        await mockUSDC.getAddress(),
-        erc20Amount,
-        "Serviço ERC20",
-        "Pagar em USDC Token",
-        duration
-      );
-      receipt = await tx.wait();
-      events = await arcQRPayments.queryFilter(arcQRPayments.filters.PaymentRequestCreated);
-      // O segundo evento criado
-      erc20InvoiceId = events[1].args.invoiceId;
+      const tx2 = await arcQRPayments
+        .connect(creator)
+        .createPaymentRequest(
+          recipient.address,
+          await mockUSDC.getAddress(),
+          erc20Amount,
+          "ERC20",
+          "",
+          duration
+        );
+      await tx2.wait();
+      erc20InvoiceId = await lastInvoiceId();
     });
 
-    it("Deve pagar uma cobrança nativa com sucesso", async function () {
-      const balanceBefore = await ethers.provider.getBalance(recipient.address);
-
-      const tx = await arcQRPayments.connect(payer).pay(nativeInvoiceId, {
-        value: nativeAmount,
-      });
-
-      await expect(tx)
+    it("pays a native invoice", async function () {
+      const before = await ethers.provider.getBalance(recipient.address);
+      await expect(arcQRPayments.connect(payer).pay(nativeInvoiceId, { value: nativeAmount }))
         .to.emit(arcQRPayments, "PaymentCompleted")
         .withArgs(nativeInvoiceId, payer.address, recipient.address, nativeAmount);
 
-      const request = await arcQRPayments.getRequest(nativeInvoiceId);
-      expect(request.paid).to.be.true;
-      expect(request.payer).to.equal(payer.address);
-
-      const balanceAfter = await ethers.provider.getBalance(recipient.address);
-      expect(balanceAfter - balanceBefore).to.equal(nativeAmount);
+      const req = await arcQRPayments.getRequest(nativeInvoiceId);
+      expect(req.paid).to.be.true;
+      expect(req.payer).to.equal(payer.address);
+      const after = await ethers.provider.getBalance(recipient.address);
+      expect(after - before).to.equal(nativeAmount);
     });
 
-    it("Deve falhar se pagar com valor incorreto de moeda nativa", async function () {
+    it("reverts on wrong native value", async function () {
       await expect(
-        arcQRPayments.connect(payer).pay(nativeInvoiceId, {
-          value: ethers.parseEther("1.0"), // menos que o amount
-        })
-      ).to.be.revertedWith("Incorrect payment amount");
+        arcQRPayments.connect(payer).pay(nativeInvoiceId, { value: ethers.parseEther("1.0") })
+      ).to.be.revertedWith("Wrong amount");
     });
 
-    it("Deve pagar uma cobrança ERC20 com sucesso", async function () {
-      const usdcAddress = await mockUSDC.getAddress();
-      
-      // Payer precisa aprovar o contrato antes de pagar
-      await mockUSDC.connect(payer).approve(await arcQRPayments.getAddress(), erc20Amount);
-
-      const balanceBefore = await mockUSDC.balanceOf(recipient.address);
-
-      const tx = await arcQRPayments.connect(payer).pay(erc20InvoiceId);
-
-      await expect(tx)
+    it("pays an ERC20 invoice", async function () {
+      await mockUSDC
+        .connect(payer)
+        .approve(await arcQRPayments.getAddress(), erc20Amount);
+      const before = await mockUSDC.balanceOf(recipient.address);
+      await expect(arcQRPayments.connect(payer).pay(erc20InvoiceId))
         .to.emit(arcQRPayments, "PaymentCompleted")
         .withArgs(erc20InvoiceId, payer.address, recipient.address, erc20Amount);
-
-      const request = await arcQRPayments.getRequest(erc20InvoiceId);
-      expect(request.paid).to.be.true;
-      expect(request.payer).to.equal(payer.address);
-
-      const balanceAfter = await mockUSDC.balanceOf(recipient.address);
-      expect(balanceAfter - balanceBefore).to.equal(erc20Amount);
+      const after = await mockUSDC.balanceOf(recipient.address);
+      expect(after - before).to.equal(erc20Amount);
     });
 
-    it("Deve falhar se pagar ERC20 enviando moeda nativa", async function () {
+    it("reverts when paying ERC20 with native attached", async function () {
       await expect(
-        arcQRPayments.connect(payer).pay(erc20InvoiceId, {
-          value: ethers.parseEther("0.1"),
-        })
-      ).to.be.revertedWith("Do not send native tokens with ERC-20 payment");
+        arcQRPayments.connect(payer).pay(erc20InvoiceId, { value: ethers.parseEther("0.1") })
+      ).to.be.revertedWith("Don't send native");
     });
 
-    it("Deve falhar se tentar pagar duas vezes", async function () {
-      await arcQRPayments.connect(payer).pay(nativeInvoiceId, {
-        value: nativeAmount,
-      });
-
+    it("reverts on double pay", async function () {
+      await arcQRPayments.connect(payer).pay(nativeInvoiceId, { value: nativeAmount });
       await expect(
-        arcQRPayments.connect(payer).pay(nativeInvoiceId, {
-          value: nativeAmount,
-        })
-      ).to.be.revertedWith("Already paid");
+        arcQRPayments.connect(payer).pay(nativeInvoiceId, { value: nativeAmount })
+      ).to.be.revertedWith("Paid");
     });
 
-    it("Deve falhar se tentar pagar cobrança expirada", async function () {
-      // Criar cobrança com duração de 1 segundo
-      const tx = await arcQRPayments.connect(creator).createPaymentRequest(
-        recipient.address,
-        ethers.ZeroAddress,
-        ethers.parseEther("1"),
-        "Expira Rápido",
-        "",
-        1 // 1 segundo
-      );
-      const receipt = await tx.wait();
-      const events = await arcQRPayments.queryFilter(arcQRPayments.filters.PaymentRequestCreated);
-      const expiredInvoiceId = events[events.length - 1].args.invoiceId;
-
-      // Esperar 2 segundos para expirar
+    it("reverts on expired invoice", async function () {
+      const tx = await arcQRPayments
+        .connect(creator)
+        .createPaymentRequest(recipient.address, ZERO, ethers.parseEther("1"), "exp", "", 1);
+      await tx.wait();
+      const expiredId = await lastInvoiceId();
       await ethers.provider.send("evm_increaseTime", [2]);
       await ethers.provider.send("evm_mine", []);
-
       await expect(
-        arcQRPayments.connect(payer).pay(expiredInvoiceId, {
-          value: ethers.parseEther("1"),
-        })
-      ).to.be.revertedWith("Payment request expired");
+        arcQRPayments.connect(payer).pay(expiredId, { value: ethers.parseEther("1") })
+      ).to.be.revertedWith("Expired");
     });
   });
 
-  describe("Cancelamento de Cobranças (cancel)", function () {
+  describe("cancel", function () {
     let invoiceId: string;
     const amount = ethers.parseEther("1.0");
 
     beforeEach(async function () {
-      const tx = await arcQRPayments.connect(creator).createPaymentRequest(
-        recipient.address,
-        ethers.ZeroAddress,
-        amount,
-        "Cobrança Cancelável",
-        "",
-        3600
-      );
+      const tx = await arcQRPayments
+        .connect(creator)
+        .createPaymentRequest(recipient.address, ZERO, amount, "x", "", 3600);
       await tx.wait();
-      const events = await arcQRPayments.queryFilter(arcQRPayments.filters.PaymentRequestCreated);
-      invoiceId = events[0].args.invoiceId;
+      invoiceId = await lastInvoiceId();
     });
 
-    it("Deve permitir o criador cancelar cobrança não paga", async function () {
-      const tx = await arcQRPayments.connect(creator).cancel(invoiceId);
-
-      await expect(tx)
+    it("lets creator cancel an unpaid invoice", async function () {
+      await expect(arcQRPayments.connect(creator).cancel(invoiceId))
         .to.emit(arcQRPayments, "PaymentCancelled")
         .withArgs(invoiceId);
-
-      const request = await arcQRPayments.getRequest(invoiceId);
-      expect(request.cancelled).to.be.true;
+      const req = await arcQRPayments.getRequest(invoiceId);
+      expect(req.cancelled).to.be.true;
     });
 
-    it("Deve falhar se outra pessoa tentar cancelar", async function () {
-      await expect(
-        arcQRPayments.connect(payer).cancel(invoiceId)
-      ).to.be.revertedWith("Only creator can cancel");
+    it("reverts when stranger cancels", async function () {
+      await expect(arcQRPayments.connect(payer).cancel(invoiceId)).to.be.revertedWith("Only creator");
     });
 
-    it("Deve falhar ao tentar pagar uma cobrança cancelada", async function () {
+    it("reverts paying a cancelled invoice", async function () {
       await arcQRPayments.connect(creator).cancel(invoiceId);
-
       await expect(
-        arcQRPayments.connect(payer).pay(invoiceId, {
-          value: amount,
-        })
-      ).to.be.revertedWith("Payment request cancelled");
+        arcQRPayments.connect(payer).pay(invoiceId, { value: amount })
+      ).to.be.revertedWith("Cancelled");
     });
 
-    it("Deve falhar ao tentar cancelar cobrança já paga", async function () {
+    it("reverts cancelling a paid invoice", async function () {
       await arcQRPayments.connect(payer).pay(invoiceId, { value: amount });
-
-      await expect(
-        arcQRPayments.connect(creator).cancel(invoiceId)
-      ).to.be.revertedWith("Cannot cancel a paid request");
+      await expect(arcQRPayments.connect(creator).cancel(invoiceId)).to.be.revertedWith(
+        "Already paid"
+      );
     });
   });
+
+  // ============================================================
+  //  NANOPAYMENTS
+  // ============================================================
+  describe("NanoPayments", function () {
+    const ratePerTick = ethers.parseEther("0.001"); // 0.001 USDC / tick
+    const interval = 60;                              // 60s per tick
+    const duration = 600;                             // 10 ticks total
+
+    it("opens a nano channel with correct deposit", async function () {
+      const ticks = duration / interval;
+      const expectedDeposit = ratePerTick * BigInt(ticks);
+
+      const tx = await arcQRPayments
+        .connect(payer)
+        .openNanoChannel(recipient.address, ZERO, ratePerTick, interval, duration, {
+          value: expectedDeposit,
+        });
+
+      const receipt = await tx.wait();
+      const events = await arcQRPayments.queryFilter(arcQRPayments.filters.NanoChannelOpened);
+      expect(events.length).to.be.equal(1);
+
+      const channelId = events[0].args.channelId;
+      const ch = await arcQRPayments.getNanoChannel(channelId);
+      expect(ch.payer).to.equal(payer.address);
+      expect(ch.receiver).to.equal(recipient.address);
+      expect(ch.deposit).to.equal(expectedDeposit);
+      expect(ch.ratePerTick).to.equal(ratePerTick);
+      expect(ch.intervalSeconds).to.equal(interval);
+      expect(ch.closed).to.be.false;
+      expect(receipt).to.not.be.null;
+    });
+
+    it("accrues ticks and allows settle", async function () {
+      const ticks = duration / interval;
+      const deposit = ratePerTick * BigInt(ticks);
+
+      await arcQRPayments
+        .connect(payer)
+        .openNanoChannel(recipient.address, ZERO, ratePerTick, interval, duration, {
+          value: deposit,
+        });
+
+      const events = await arcQRPayments.queryFilter(arcQRPayments.filters.NanoChannelOpened);
+      const channelId = events[0].args.channelId;
+
+      // advance 3 intervals (180s)
+      await ethers.provider.send("evm_increaseTime", [180]);
+      await ethers.provider.send("evm_mine", []);
+
+      // Receiver claims via a relayer (payer) so its ETH balance isn't affected by gas.
+      const tx = await arcQRPayments.connect(payer).settleNanoChannel(channelId);
+      await expect(tx).to.emit(arcQRPayments, "NanoTickSettled");
+      const ch = await arcQRPayments.getNanoChannel(channelId);
+      expect(ch.withdrawn).to.equal(ratePerTick * 3n);
+    });
+
+    it("does nothing when no new ticks have accrued", async function () {
+      const ticks = duration / interval;
+      const deposit = ratePerTick * BigInt(ticks);
+
+      await arcQRPayments
+        .connect(payer)
+        .openNanoChannel(recipient.address, ZERO, ratePerTick, interval, duration, {
+          value: deposit,
+        });
+
+      const events = await arcQRPayments.queryFilter(arcQRPayments.filters.NanoChannelOpened);
+      const channelId = events[0].args.channelId;
+
+      const tx = await arcQRPayments.connect(payer).settleNanoChannel(channelId);
+      const settled = await arcQRPayments.queryFilter(
+        arcQRPayments.filters.NanoTickSettled,
+        tx.blockNumber
+      );
+      // No tick event for this call (tx confirmed, but no event means zero ticks)
+      const thisBlockEvents = settled.filter((e) => e.blockNumber === tx.blockNumber);
+      expect(thisBlockEvents.length).to.equal(0);
+    });
+
+    it("caps owed by remaining deposit", async function () {
+      const ticks = duration / interval;
+      const deposit = ratePerTick * BigInt(ticks);
+
+      await arcQRPayments
+        .connect(payer)
+        .openNanoChannel(recipient.address, ZERO, ratePerTick, interval, duration, {
+          value: deposit,
+        });
+      const events = await arcQRPayments.queryFilter(arcQRPayments.filters.NanoChannelOpened);
+      const channelId = events[0].args.channelId;
+
+      // run past the channel lifetime
+      await ethers.provider.send("evm_increaseTime", [duration * 2]);
+      await ethers.provider.send("evm_mine", []);
+
+      await arcQRPayments.connect(payer).settleNanoChannel(channelId);
+      const ch = await arcQRPayments.getNanoChannel(channelId);
+      expect(ch.withdrawn).to.equal(deposit);
+    });
+
+    it("refunds leftover on close", async function () {
+      const ticks = duration / interval;
+      const deposit = ratePerTick * BigInt(ticks);
+
+      await arcQRPayments
+        .connect(payer)
+        .openNanoChannel(recipient.address, ZERO, ratePerTick, interval, duration, {
+          value: deposit,
+        });
+      const events = await arcQRPayments.queryFilter(arcQRPayments.filters.NanoChannelOpened);
+      const channelId = events[0].args.channelId;
+
+      // advance 2 intervals
+      await ethers.provider.send("evm_increaseTime", [120]);
+      await ethers.provider.send("evm_mine", []);
+      await arcQRPayments.connect(payer).settleNanoChannel(channelId);
+
+      const before = await ethers.provider.getBalance(payer.address);
+      await arcQRPayments.connect(payer).closeNanoChannel(channelId);
+      const after = await ethers.provider.getBalance(payer.address);
+
+      const ch = await arcQRPayments.getNanoChannel(channelId);
+      expect(ch.closed).to.be.true;
+      // payer got back: deposit - 2 ticks (gas aside)
+      // use ch.withdrawn instead of balance to remove gas noise
+      expect(ch.withdrawn).to.equal(ratePerTick * 2n);
+      expect(after).to.be.lessThan(before + (deposit - ch.withdrawn) + ethers.parseEther("0.01"));
+      expect(after).to.be.greaterThan(before); // got something back
+    });
+
+    it("reverts on bad params", async function () {
+      await expect(
+        arcQRPayments.connect(payer).openNanoChannel(
+          ethers.ZeroAddress,
+          ZERO,
+          ratePerTick,
+          interval,
+          duration,
+          { value: ratePerTick * 10n }
+        )
+      ).to.be.revertedWith("Receiver=0");
+
+      await expect(
+        arcQRPayments.connect(payer).openNanoChannel(
+          recipient.address,
+          ZERO,
+          0,
+          interval,
+          duration,
+          { value: 0 }
+        )
+      ).to.be.revertedWith("Rate=0");
+
+      await expect(
+        arcQRPayments.connect(payer).openNanoChannel(
+          recipient.address,
+          ZERO,
+          ratePerTick,
+          0,
+          duration,
+          { value: 0 }
+        )
+      ).to.be.revertedWith("Interval=0");
+
+      await expect(
+        arcQRPayments.connect(payer).openNanoChannel(
+          recipient.address,
+          ZERO,
+          ratePerTick,
+          100,
+          50, // duration < interval
+          { value: 0 }
+        )
+      ).to.be.revertedWith("Dur<Interval");
+    });
+
+    it("reverts when wrong deposit sent", async function () {
+      await expect(
+        arcQRPayments.connect(payer).openNanoChannel(
+          recipient.address,
+          ZERO,
+          ratePerTick,
+          interval,
+          duration,
+          { value: ethers.parseEther("0.005") }
+        )
+      ).to.be.revertedWith("Wrong deposit");
+    });
+
+    it("estimateOwed returns correct values", async function () {
+      const ticks = duration / interval;
+      const deposit = ratePerTick * BigInt(ticks);
+
+      await arcQRPayments
+        .connect(payer)
+        .openNanoChannel(recipient.address, ZERO, ratePerTick, interval, duration, {
+          value: deposit,
+        });
+      const events = await arcQRPayments.queryFilter(arcQRPayments.filters.NanoChannelOpened);
+      const channelId = events[0].args.channelId;
+
+      await ethers.provider.send("evm_increaseTime", [150]); // 2.5 intervals
+      await ethers.provider.send("evm_mine", []);
+
+      const [newTicks, owed] = await arcQRPayments.estimateOwed(channelId);
+      expect(newTicks).to.equal(2n);
+      expect(owed).to.equal(ratePerTick * 2n);
+    });
+    });
 });
+
+

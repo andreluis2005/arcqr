@@ -1,0 +1,17 @@
+{
+  "name": "Arc QR Payments",
+  "short_name": "Arc QR",
+  "description": "Instant blockchain payment requests on Arc Network L1.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#060a12",
+  "theme_color": "#7c3aed",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/favicon.ico",
+      "sizes": "64x64 32x32 24x24 16x16",
+      "type": "image/x-icon"
+    }
+  ]
+}

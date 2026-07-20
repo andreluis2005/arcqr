@@ -13,6 +13,19 @@ export interface PaymentRequest {
   payer: `0x${string}`;
 }
 
+export interface NanoChannel {
+  payer: `0x${string}`;
+  receiver: `0x${string}`;
+  token: `0x${string}`;
+  deposit: bigint;
+  withdrawn: bigint;
+  ratePerTick: bigint;
+  intervalSeconds: bigint;
+  lastTickAt: bigint;
+  openedAt: bigint;
+  closed: boolean;
+}
+
 export type PaymentStatus = "active" | "paid" | "cancelled" | "expired";
 
 export interface CreatePaymentFormData {
@@ -22,4 +35,12 @@ export interface CreatePaymentFormData {
   title: string;
   description: string;
   durationDays: number;
+}
+
+export interface NanoChannelFormData {
+  receiver: string;
+  token: string;
+  ratePerTick: string;
+  intervalSeconds: number;
+  durationSeconds: number;
 }
